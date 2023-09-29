@@ -1,0 +1,9 @@
+
+/target
+/dist
+/resources
+/node_modules
+.shadow-cljs/
+.clj-kondo/
+.cpcache/
+.nrepl-port
