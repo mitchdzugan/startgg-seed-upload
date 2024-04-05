@@ -5,7 +5,8 @@
 
 (def routes
   [["/" {:name ::home}]
-   ["/oauth" {:name ::oauth}]])
+   ["/oauth" {:name ::oauth}]
+   ["/fallback" {:name ::fallback}]])
 
 (def router (r/router routes))
 

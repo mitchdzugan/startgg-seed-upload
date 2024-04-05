@@ -1,7 +1,12 @@
+; import { GoogleSpreadsheet } from 'google-spreadsheet';
+; import { JWT } from 'google-auth-library';
+
 (ns server
   (:require ["express" :as express]
             ["fs" :as fs]
             ["request-curl" :as curl]
+            ["google-auth-library" :as importGoogleAuthLibrary]
+            ["google-spreadsheet" :as importGoogleSpreadsheet]
             [allpa.core :as a]
             [cljs.reader :as reader]
             [router :as r]
@@ -11,6 +16,59 @@
             [mayu.frp.event :as e]
             [mayu.frp.signal :as s]
             [mayu.async :refer [go-loop <!]]))
+
+(def JWT (aget importGoogleAuthLibrary "JWT"))
+(def Sheet (aget importGoogleSpreadsheet "GoogleSpreadsheet"))
+(def auth (JWT. #js {:email "sheets-processor@gg-seed-uploader.iam.gserviceaccount.com"
+                     :key js/process.env.GOOGLE_SERVICE_KEY
+                     :scopes #js ["https://www.googleapis.com/auth/spreadsheets"]}))
+
+
+(defn fetch [url ^js res]
+  (.then (curl #js {:url url})
+         (fn [^js curld]
+           (case (.-statusCode curld)
+             200 (.json res #js{:csv (.-body curld)})
+             307 (fetch (.. curld -headers -Location) res)
+             404 (.json res #js{:error "Sheet does not exist"})
+             (.json res #js{:error "Sheet is not public"})))))
+
+
+(defn pfetch [url]
+  (.then (curl #js {:url url})
+         (fn [^js curld]
+           (case (.-statusCode curld)
+             200 (.-body curld)
+             307 (pfetch (.. curld -headers -Location))
+             nil))))
+
+(defn get-sheet-data [id ^js sheet]
+  (let [sheet-id (.-sheetId sheet)
+        sheet-title (.-title sheet)
+        url (str "https://docs.google.com/spreadsheets/d/"
+                  id
+                  "/export?format=csv&gid="
+                  sheet-id)]
+    (.then (pfetch url)
+      (fn [csv]
+        [sheet-title csv]))))
+
+(defn dl-sheet [id ^js res]
+  (let [url (str "https://docs.google.com/spreadsheets/d/"
+                  id
+                  "/export?format=csv")
+        ^js doc (Sheet. id auth)]
+    (.then (.loadInfo doc)
+      (fn [data]
+        (.then 
+          (js/Promise.all (.map (js/Object.values (.-sheetsByIndex doc))
+                                (fn [^js sheet] (get-sheet-data id sheet))))
+          (fn [tabs]
+            (let [tabdata #js {}]
+              (doseq [[name csv] tabs]
+                (aset tabdata name csv))
+              (js/console.log tabdata)
+              (.json res tabdata))))))))
 
 (def dev?
   (let [debug? (do ^boolean js/goog.DEBUG)]
@@ -111,15 +169,6 @@
              (-> res (.status 400) (.send "Invalid code"))))))
 
 
-(defn fetch [url ^js res]
-  (.then (curl #js {:url url})
-         (fn [^js curld]
-           (case (.-statusCode curld)
-             200 (.json res #js{:csv (.-body curld)})
-             307 (fetch (.. curld -headers -Location) res)
-             404 (.json res #js{:error "Sheet does not exist"})
-             (.json res #js{:error "Sheet is not public"})))))
-
 (defn main! []
   (.get app #"/api_oauth"
         (fn [req res]
@@ -131,7 +180,7 @@
                 url (str "https://docs.google.com/spreadsheets/d/"
                          id
                          "/export?format=csv")]
-            (fetch url res))))
+            (dl-sheet id res))))
   (.get app #".*"
         (fn [req ^js res next]
           (let [url (.-url req)
@@ -142,7 +191,7 @@
   (.use app (.static express (if dev? "target" "dist")))
   (let [port (if (some? js/process.env.PORT)
                (js/parseInt js/process.env.PORT)
-               3000)]
+               3010)]
     (.listen app port #(println (str "App listening on port " port)))))
 
 (defn reload! []
